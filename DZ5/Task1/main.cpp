@@ -4,6 +4,7 @@
 #include <vector>
 #include <iomanip>
 #include <cmath>
+#include <sstream>
 using namespace std;
 class TrajetoryLoger{
     private:
