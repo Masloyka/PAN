@@ -263,17 +263,18 @@ public:
         // Ограничение угла атаки 0.26 рад ~ 15 градусов, информация взята из Открытых источников
         // -0.1 рад ~ -5 градусов, информация из открытых источников
         alpha_control = std::max(-0.1, std::min(0.26, alpha_control));
-
+        std::cout << "Текущий угол атаки " << alpha_control << "\n";
         
         double lift = computeLiftForce(current.V, current.y, alpha_control);
         double drag = computeDragForce(current.V, current.y, alpha_control);
 
         double Fx = thrust - drag - mass * GRAVITY * sin(current.theta);
         double Fy = lift - mass * GRAVITY * cos(current.theta);
-
+        std::cout << "СИЛЫ: " << Fx << "\t" << Fy << "\n";
         
         double ax = Fx / mass;
         double ay = Fy / mass;
+        std::cout << "Ускорения: " << ax << "\t" << ay << "\n";
         // Выполняем пересчет параметров самолета
         next.V = current.V + ax * dt;
         next.V = std::max(100.0, next.V); 
@@ -288,7 +289,7 @@ public:
         next.Vy = next.V * sin(next.theta);
         next.x = current.x + next.Vx * dt;
         next.y = current.y + next.Vy * dt;
-
+        std::cout << "Скорости по осям " << next.Vx << "\t" << next.Vy << "\n";
         // Предотвращение удара о землю, путем задания минимально возможной высоты и маскимально возможной вертикальной скорости
         if (next.y < 0) {
             next.y = 10.0;
@@ -361,14 +362,14 @@ public:
                 alpha_control = 0.02; // Вывод на высоту
             }
 
-            if (current.V < FINAL_VELOCITY * 0.9) {
-                alpha_control -= 0.01;
-            }
-
+            // if (current.V < FINAL_VELOCITY * 0.9) {
+            //     alpha_control -= 0.01;
+            // }
+            
             current = ac.updateState(current, dt, alpha_control);
             trajectory.addPoint(current);
             // Добавим вывод промежуточного состояния моделирования полета МС-21
-            if (step % 10 == 0) {
+            if (step % 1 == 0) {
                 std::cout << "t=" << current.time << "с: ";
                 std::cout << "H=" << current.y << "м, ";
                 std::cout << "V=" << current.V*3.6 << "км/ч, ";
