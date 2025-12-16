@@ -47,7 +47,6 @@ class WaypointManager{
             }
             std::string value;
             std::string line;
-            points.clear();
             int i = 0;
             while (std::getline(fin, line)){
                 std::stringstream ss(line);
