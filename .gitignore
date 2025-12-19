@@ -1,2 +1,4 @@
 .vscode/
 *.exe
+Optimization.cpp
+test.cpp

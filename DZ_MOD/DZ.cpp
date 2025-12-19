@@ -11,14 +11,21 @@
 const double MS21_MASS = 70000.0;          // Масса самолета, кг
 const double MS21_WING_AREA = 113.0;       // Площадь крыла, м²
 const double MS21_NOMINAL_THRUST = 2 * 137200.0; // Суммарная тяга, Н
+const double MS21_CY0 = 0.25;               // Коэффициент подъемной силы при нулевом угле атаки
 const double MAX_THRUST_PERCENT = 0.9;     // Реалистичный процент тяги
 const double INITIAL_ALTITUDE = 400.0;      // Начальная высота, м
 const double FINAL_ALTITUDE = 6500.0;       // Конечная высота, м
-const double INITIAL_VELOCITY = 310.0 / 3.6; // Начальная скорость, м/с (340 км/ч)
-const double FINAL_VELOCITY = 550.0 / 3.6;  // Конечная скорость, м/с (670 км/ч)
+const double INITIAL_VELOCITY = 310.0 / 3.6; // Начальная скорость, м/с 
+const double FINAL_VELOCITY = 550.0 / 3.6;  // Конечная скорость, м/с
 const double GRAVITY = 9.81;               // Ускорение свободного падения, м/с²
 const double R_AIR = 287.05;               // Газовая постоянная воздуха, Дж/(кг·К)
 const double PI = 3.14159;
+const double Cy0 = 0.250;
+const double MAX_CLIMB_ANGLE = 15.0; // Максимальный угол набора высоты в радианах
+const double DEG_TO_RAD = 57.3; // Перевод из градусов в радианы
+const double MAX_VERTICAL_SPEED = 8.0; // Максимальная скорость набора высоты
+const double MIN_SPEED = INITIAL_VELOCITY; // Минимальная скорость для набора высоты
+const double DELTA_H = 250;
 class CSVWriter {
 private:
     std::ofstream file;
@@ -83,8 +90,8 @@ public:
 
         for (size_t i = 0; i < altitude.size()-1; i++){
             if (current_altitude >= altitude[i] && current_altitude <= altitude[i+1]){
-                double d_value = (parametrs[i+1] - parametrs[i])/(altitude[i+1] - altitude[i]) * current_altitude;
-                return parametrs[i+1] + d_value;
+                double d_value = (current_altitude - altitude[i]) / (altitude[i+1]-altitude[i]);
+                return parametrs[i] + d_value * (parametrs[i+1] - parametrs[i]);
             }
         }
         return 0.1;
@@ -226,14 +233,36 @@ public:
         K = 0.05;
         Cy_max = 1.1;
     }
+    // Расчет угла атаки (в градусах)
+    double calculate_alpha(double current_altitude, double current_velocity) {
+        double rho = env.getDensity(current_altitude);
+        double grad_Cy = grad_Cy_alpha();
+        double q = 0.5 * rho * current_velocity * current_velocity;
+        double current_P = total_thrust(current_altitude);
 
-    // Коэффициент подъемной силы в зависимости от угла атаки
-    double getLiftCoefficient(double alpha) const {
-        // Упрощенная линейная зависимость до сваливания
-        double Cl_alpha = 5.0; // Производная по углу атаки
-        return std::min(Cl_alpha * alpha, Cy_max);
+        double alpha = (MS21_MASS * GRAVITY - q * MS21_WING_AREA * MS21_CY0) / (q * MS21_WING_AREA * grad_Cy + current_P);
+        return alpha;
+
+    }
+    // Расчет градиента коэффициента подъема
+    double grad_Cy_alpha() const{
+        double b = 39.6; // размах крыла
+        double AR = b*b/MS21_WING_AREA;
+        return ((2 * PI * AR) / (2 + pow(4+AR*AR, 0.5))) * PI/180; // перевод в градусы так как угол атаки задаю в градусах
     }
 
+    // Коэффициент подъемной силы в зависимости от угла атаки
+double getLiftCoefficient(double alpha) const{
+        if (alpha < 0) alpha = 0;
+        if (alpha > 12) alpha = 12;
+    // Для расчета воспользуемся линейной зависимостью
+        double grad_Cy = grad_Cy_alpha();
+        double Cy = 0.25 + grad_Cy * alpha;
+        if (Cy > 1.1)
+            return 1.1;
+        return Cy;
+
+}
     // Коэффициент сопротивления в зависимости от коэффициента подъемной силы
     double getDragCoefficient(double Cl) const {
         // Параболическая поляра
@@ -241,160 +270,184 @@ public:
     }
 
     // Подъемная сила
-    double computeLiftForce(double V, double H, double alpha) const {
-        double rho = env.getDensity(H);
-        double q = 0.5 * rho * V * V;
-        double Cl = getLiftCoefficient(alpha);
-        return Cl * wing_area * q;
+    double computeLiftForce(double current_velocity, double current_altitude, double alpha) const {
+        double rho = env.getDensity(current_altitude);
+        double Cy = getLiftCoefficient(alpha);
+        double L = 0.5 * rho * current_velocity * current_velocity * MS21_WING_AREA * Cy;
+        return L;
     }
 
     // Сила сопротивления
-    double computeDragForce(double V, double H, double alpha) const {
-        double rho = env.getDensity(H);
-        double q = 0.5 * rho * V * V;
-        double Cl = getLiftCoefficient(alpha);
-        double Cd = getDragCoefficient(Cl);
-        return Cd * wing_area * q;
+    double computeDragForce(double current_velocity, double current_altitude, double alpha) const {
+        double rho = env.getDensity(current_altitude);
+        double Cx = getDragCoefficient(getLiftCoefficient(alpha));
+        double X = 0.5 * rho * current_velocity * current_velocity * MS21_WING_AREA * Cx;
+        return X;
     }
-
-    TrajectoryPoint updateState(const TrajectoryPoint& current, double dt, double alpha_control) {
-        TrajectoryPoint next = current;
-
-        // Ограничение угла атаки 0.26 рад ~ 15 градусов, информация взята из Открытых источников
-        // -0.1 рад ~ -5 градусов, информация из открытых источников
-        alpha_control = std::max(-0.1, std::min(0.26, alpha_control));
-        std::cout << "Текущий угол атаки " << alpha_control << "\n";
-        
-        double lift = computeLiftForce(current.V, current.y, alpha_control);
-        double drag = computeDragForce(current.V, current.y, alpha_control);
-
-        double Fx = thrust - drag - mass * GRAVITY * sin(current.theta);
-        double Fy = lift - mass * GRAVITY * cos(current.theta);
-        std::cout << "СИЛЫ: " << Fx << "\t" << Fy << "\n";
-        
-        double ax = Fx / mass;
-        double ay = Fy / mass;
-        std::cout << "Ускорения: " << ax << "\t" << ay << "\n";
-        // Выполняем пересчет параметров самолета
-        next.V = current.V + ax * dt;
-        next.V = std::max(100.0, next.V); 
-
-        if (next.V > 0) {
-            // угол наклона траектории это арктангенс горизонтального ускорения к вертикальному ускорению
-            next.theta = atan2(ay, ax + GRAVITY * sin(current.theta)); 
-        }
-
-        next.theta = std::max(-0.3, std::min(0.3, next.theta));
-        next.Vx = next.V * cos(next.theta);
-        next.Vy = next.V * sin(next.theta);
-        next.x = current.x + next.Vx * dt;
-        next.y = current.y + next.Vy * dt;
-        std::cout << "Скорости по осям " << next.Vx << "\t" << next.Vy << "\n";
-        // Предотвращение удара о землю, путем задания минимально возможной высоты и маскимально возможной вертикальной скорости
-        if (next.y < 0) {
-            next.y = 10.0;
-            next.Vy = std::max(0.0, next.Vy);
-        }
-
-        next.alpha = alpha_control;
-        next.mach = env.getMach(next.V, next.y);
-        next.acceleration = ax;
-        double dfuel = fuel_flow * dt;
-        next.fuel = current.fuel + dfuel;
-        next.mass = current.mass - dfuel;
-
-        // Изменяем тягу, в следствии изменения массы ЛА
-        thrust = MS21_NOMINAL_THRUST * MAX_THRUST_PERCENT * (next.mass / initial_mass);
-
-        next.time = current.time + dt;
-
-        return next;
+    // Расчет тяги в зависимости от параметров окружающей среды
+    double total_thrust(double current_altitude){
+        double p_0 = env.getPressure(0);
+        double current_p = env.getPressure(current_altitude);
+        return MS21_NOMINAL_THRUST*MAX_THRUST_PERCENT * pow(current_p/p_0, 0.7); // коррекция тяги по плототности и давлению 
     }
-
-    double getInitialMass() const { return initial_mass; }
 };
 
 
 class DynamicProgrammingSolver {
+    private:
+        TableInterpolator env;
 public:
     DynamicProgrammingSolver() {}
+    // Расчет этапа разгона
+    double calculate_razgon(double altitude, double initial_velocity, double final_velocity, Aircraft& ac){
+        double avg_Vel = (initial_velocity+final_velocity) / 2;
+        if (avg_Vel < MIN_SPEED) avg_Vel = MIN_SPEED;
+        double current_P = ac.total_thrust(altitude);
+        double alpha_degree = ac.calculate_alpha(altitude, avg_Vel);
 
+        double Cx = ac.getDragCoefficient(ac.getLiftCoefficient(alpha_degree));
+        double rho = env.getDensity(altitude);
+        double q = 0.5 * avg_Vel* avg_Vel * rho;
+        double alpha_rad = alpha_degree/DEG_TO_RAD;
+        double a_x = ((current_P * cos(alpha_rad)) - q * Cx * MS21_WING_AREA) / MS21_MASS;
+        return (final_velocity - initial_velocity) / a_x;
+
+    }
+    // Расчет этапа подъема
+    double calculate_podiem(double initial_alt, double final_alt, double velocity, Aircraft& ac){
+        double avg_alt = (final_alt - initial_alt) / 2;
+        double current_P = ac.total_thrust(avg_alt);
+        double alpha_degree = ac.calculate_alpha(avg_alt, velocity);
+
+        double Cx = ac.getDragCoefficient(ac.getLiftCoefficient(alpha_degree));
+        double rho = env.getDensity(avg_alt);
+        double q = 0.5 * velocity*velocity*rho;
+        double X = q * MS21_WING_AREA * Cx;
+
+        double sin_tetha = std::min((current_P-X) / (MS21_MASS* GRAVITY), MAX_CLIMB_ANGLE/DEG_TO_RAD);
+        double vel_y = velocity * sin_tetha;
+        if (vel_y > MAX_VERTICAL_SPEED) vel_y = MAX_VERTICAL_SPEED;
+
+        double dt = (final_alt-initial_alt) / vel_y;
+        return dt;
+    }
+    // Расчет этапа подъем разгон
+    double calculate_podiem_razgon(double initial_alt, double final_alt, double initial_vel, double final_vel, Aircraft& ac){
+        double avg_alt = 0.5 * (final_alt - initial_alt);
+        double avg_vel = 0.5 * (final_vel - initial_vel);
+        
+        double dH = final_alt - initial_alt;
+        double dV = final_vel - initial_vel;
+
+        double time_for_climb = calculate_podiem(initial_alt, final_alt, avg_vel, ac);
+        double time_for_acc = calculate_razgon(avg_alt, initial_vel, final_vel, ac);
+
+        double dt = std::max(time_for_climb, time_for_acc);
+
+        double Vy = dH/dt;
+        if(Vy > MAX_VERTICAL_SPEED){
+            double optional_dt = dH / MAX_VERTICAL_SPEED;
+            dt = optional_dt; 
+        }
+        return dt;
+    }
     Trajectory computeOptimalTrajectory(Aircraft& ac, double time_max = 600.0) {
-        Trajectory trajectory;
-        double dt = 1.0; 
+        
+        int N = (FINAL_ALTITUDE - INITIAL_ALTITUDE) / DELTA_H;
+        double DELTA_V = (FINAL_VELOCITY - INITIAL_VELOCITY) / N;
+        std::vector <double> Hgrid(N+1);
+        std::vector <double> Vgrid(N+1);
+        
+        for (size_t i = 0; i < N+1; i++){
+            Hgrid[i] = INITIAL_ALTITUDE + i*DELTA_H;
+            Vgrid[i] = INITIAL_VELOCITY + i * DELTA_V;
+        }
+        std::cout << "Критерий минимизации времени" << "\n";
+        std::cout << "Текущее количество N: " << N << "\n";
+        std::vector<std::vector<double>> cost_table(N + 1, std::vector<double>(N + 1, 1e9));
+        std::vector<std::vector<double>> time_table(N + 1, std::vector<double>(N + 1, 0.0));
+        std::vector<std::vector<int>> prev_i(N + 1, std::vector<int>(N + 1, -1));
+        std::vector<std::vector<int>> prev_j(N + 1, std::vector<int>(N + 1, -1));
+        cost_table[0][0] = 0.0;
+        for (int i = 0; i <= N; i++){
+            for (int j = 0; j <= N; j++){
+                if (cost_table[i][j] >= 1e9) continue;
+                double current_altitude = Hgrid[i];
+                double current_velocity = Vgrid[j];
+                if (j < N){
+                    double final_velocity = Vgrid[j+1];
+                    double time_razgon = calculate_razgon(current_altitude, current_velocity, final_velocity, ac);
+                    double new_cost = cost_table[i][j]+time_razgon;
 
-        TrajectoryPoint start;
-        start.time = 0;
-        start.x = 0;
-        start.y = INITIAL_ALTITUDE;
-        start.V = INITIAL_VELOCITY;
-        start.Vx = INITIAL_VELOCITY;
-        start.Vy = 5.0; // Начальная вертикальная скорость 5 м/с
-        start.theta = 0.05; // Начальный угол 3 градуса
-        start.alpha = 0.03;
-        start.fuel = 0;
-        start.mass = ac.getInitialMass();
-        start.acceleration = 0;
+                    if(new_cost < cost_table[i][j+1]){
+                        cost_table[i][j+1] = new_cost;
+                        time_table[i][j+1] = time_table[i][j]+time_razgon;
+                        prev_i[i][j+1] = i;
+                        prev_j[i][j+1] = j;
+                        
+                    }
+                }
 
-        TableInterpolator env;
-        start.mach = env.getMach(start.V, start.y);
+                if(i < N){
+                    double final_altitude = Hgrid[i+1];
+                    double time_podiem = calculate_podiem(current_altitude, final_altitude, current_velocity, ac);
+                    double new_cost = cost_table[i][j]+time_podiem;
 
-        TrajectoryPoint current = start;
-        trajectory.addPoint(current);
+                    if (new_cost < cost_table[i+1][j]){
+                        cost_table[i+1][j] = new_cost;
+                        time_table[i+1][j] = time_table[i][j] + time_podiem;
+                        prev_i[i+1][j] = i;
+                        prev_j[i+1][j] = j;
+                    }
+                }
 
-        std::cout << "Целевая высота: " << FINAL_ALTITUDE << "м" << std::endl;
-        std::cout << "Целевая скорость: " << FINAL_VELOCITY*3.6 << "км/ч" << std::endl;
-        std::cout << "Время моделирования: " << time_max << "с" << std::endl << std::endl;
+                if (i < N && j < N){
+                    double final_altitude = Hgrid[i+1];
+                    double final_velocity = Vgrid[j+1];
+                    double time_podiem_razgon = calculate_podiem_razgon(current_altitude, final_altitude, current_velocity, final_velocity, ac);
+                    double new_cost = cost_table[i][j]+time_podiem_razgon;
 
-        int step = 0;
-        bool target_reached = false;
-
-        while (current.time < time_max && !target_reached) {
-            step++;
-            double alpha_control;
-            double height_ratio = current.y / FINAL_ALTITUDE;
-
-            if (height_ratio < 0.3) {
-                alpha_control = 0.06; // Набор высоты
-            } else if (height_ratio < 0.7) {
-                alpha_control = 0.04; // Крейсерский набор
-            } else {
-                alpha_control = 0.02; // Вывод на высоту
-            }
-
-            // if (current.V < FINAL_VELOCITY * 0.9) {
-            //     alpha_control -= 0.01;
-            // }
-            
-            current = ac.updateState(current, dt, alpha_control);
-            trajectory.addPoint(current);
-            // Добавим вывод промежуточного состояния моделирования полета МС-21
-            if (step % 1 == 0) {
-                std::cout << "t=" << current.time << "с: ";
-                std::cout << "H=" << current.y << "м, ";
-                std::cout << "V=" << current.V*3.6 << "км/ч, ";
-                std::cout << "Vy=" << current.Vy << "м/с, ";
-                std::cout << "θ=" << current.theta*180/PI << "°" << std::endl;
-            }
-
-            // Проверка достижения заданной высоты
-            if (current.y >= FINAL_ALTITUDE) {
-                target_reached = true;
-                std::cout << std::endl << "ЦЕЛЕВАЯ ВЫСОТА ДОСТИГНУТА!" << std::endl;
-            }
-
-           if (current.y > 20000 || current.V > 1000) {
-                std::cout << "✗ Прервано: значения не соответствуют реальности." << std::endl;
-                break;
+                    if(new_cost < cost_table[i+1][j+1]){
+                        cost_table[i+1][j+1] = new_cost;
+                        time_table[i+1][j+1] = time_table[i][j] + time_podiem_razgon;
+                        prev_i[i+1][j+1] = i;
+                        prev_j[i+1][j+1] = j;
+                    }
+                }
             }
         }
-        std::cout << "Высота: " << current.y << " м (" << (current.y/FINAL_ALTITUDE*100) << "% от цели)" << std::endl;
-        std::cout << "Скорость: " << current.V*3.6 << " км/ч" << std::endl;
-        std::cout << "Время: " << current.time << " с" << std::endl;
-        std::cout << "Расход топлива: " << current.fuel << " кг" << std::endl;
-        std::cout << "Число Маха: " << current.mach << std::endl;
-        return trajectory;
-    }
+        // Вывод матрицы времени
+        std::cout << "Матрица времени (s):\n";
+        std::cout << "     V";
+        for (int j = 0; j <= N; j++) {
+            std::cout << std::setw(7) << (int)Vgrid[j];
+        }
+        std::cout << "\nH\n";
+        for (int i = 0; i <= N; i++) {
+            std::cout << std::setw(5) << (int)Hgrid[i];
+            for (int j = 0; j <= N+1; j++) {
+                if (time_table[i][j] < 1e8) {
+                    std::cout << std::setw(7) << (int)time_table[i][j];
+                }
+                else {
+                    std::cout << std::setw(7) << "---";
+                }
+            }
+            std::cout << "\n";
+        }
+        
+        std::vector<std::pair<double, double> > path;
+        int ci = N, cj = N;
+        while (ci >= 0 && cj >= 0) {
+            path.push_back(std::make_pair(Hgrid[ci], Vgrid[cj]));
+            int pi = prev_i[ci][cj];
+            int pj = prev_j[ci][cj];
+            if (pi == -1) break;
+            ci = pi;
+            cj = pj;
+        }
+    
+}
 };
 
 int main() {
@@ -404,7 +457,7 @@ int main() {
         DynamicProgrammingSolver solver;
         Trajectory trajectory = solver.computeOptimalTrajectory(ms21, 600.0);
         trajectory.saveToCSV("ms21_trajectory_realistic.csv");
-        trajectory.plotTrajectory();
+        // trajectory.plotTrajectory();
     } catch (const std::exception& e) {
         std::cerr << "ОШИБКА: " << e.what() << std::endl;
         return 1;
