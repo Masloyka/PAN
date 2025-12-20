@@ -18,10 +18,9 @@ const double FINAL_ALTITUDE = 6500.0;       // Конечная высота, м
 const double INITIAL_VELOCITY = 310.0 / 3.6; // Начальная скорость, м/с 
 const double FINAL_VELOCITY = 550.0 / 3.6;  // Конечная скорость, м/с
 const double GRAVITY = 9.81;               // Ускорение свободного падения, м/с²
-const double R_AIR = 287.05;               // Газовая постоянная воздуха, Дж/(кг·К)
 const double PI = 3.14159;
 const double Cy0 = 0.250;
-const double MAX_CLIMB_ANGLE = 15.0; // Максимальный угол набора высоты в радианах
+const double MAX_CLIMB_ANGLE = 15.0; // Максимальный угол набора высоты в градусах
 const double DEG_TO_RAD = 57.3; // Перевод из градусов в радианы
 const double MAX_VERTICAL_SPEED = 8.0; // Максимальная скорость набора высоты
 const double MIN_SPEED = INITIAL_VELOCITY; // Минимальная скорость для набора высоты
@@ -107,30 +106,17 @@ public:
 class TrajectoryPoint {
 public:
     double time;        // Время, с
-    double x;           // Горизонтальная координата, м
     double y;           // Высота, м
     double V;           // Скорость, м/с
-    double Vx;          // Горизонтальная скорость, м/с
-    double Vy;          // Вертикальная скорость, м/с
-    double theta;       // Угол наклона траектории, рад
-    double alpha;       // Угол атаки, рад
-    double fuel;        // Итоговое количество потраченного топлива, кг
-    double mass;        // Масса, кг
-    double acceleration;// Ускорение, м/с²
-    double mach;        // Число Маха
 
-    TrajectoryPoint(double t = 0, double X = 0, double Y = 0, double vel = 0,
-                   double V_X = 0, double V_Y = 0, double thet = 0, double alp = 0,
-                   double f = 0, double m = MS21_MASS, double acc = 0, double mch = 0)
-        : time(t), x(X), y(Y), V(vel), Vx(V_X), Vy(V_Y), theta(thet), alpha(alp),
-          fuel(f), mass(m), acceleration(acc), mach(mch) {}
+
+    TrajectoryPoint(double t = 0, double Y = 0, double vel = 0)
+        : time(t), y(Y), V(vel) {}
 
     void print() const {
         std::cout << "Текущая точка\n";
         std::cout << std::fixed << std::setprecision(1);
         std::cout << "t=" << time << "с, H=" << y << "м, V=" << V*3.6 << "км/ч, ";
-        std::cout << "Vy=" << Vy << "м/с, θ=" << theta*180/PI << "°";
-        std::cout << ", масса=" << mass << "кг" << std::endl;
     }
 };
 
@@ -150,21 +136,14 @@ public:
     double getTotalTime() const { 
         return points.empty() ? 0 : points.back().time; 
     }
-    double getTotalFuel() const { 
-        return points.empty() ? 0 : points.back().fuel; 
-    }
 
     void saveToCSV(const std::string& filename) {
         CSVWriter csv(filename);
-        csv.writeHeader({"time_s", "altitude_m", "velocity_ms", "velocity_kmh",
-                        "vertical_velocity_ms", "theta_deg", "alpha_deg",
-                        "fuel_kg", "mass_kg", "acceleration_ms2", "mach_number"});
+        csv.writeHeader({"time_s", "altitude_m", "velocity_ms"});
 
         for (const auto& point : points) {
             std::vector<double> row_data = {
-                point.time, point.y, point.V, point.V * 3.6,
-                point.Vy, point.theta * 180/PI, point.alpha * 180/PI,
-                point.fuel, point.mass, point.acceleration, point.mach
+                point.time, point.y, point.V,
             };
             csv.writeRow(row_data);
         }
@@ -173,7 +152,8 @@ public:
     }
 
     void plotTrajectory() const {
-        FILE* gp = _popen("\"C:\\Program Files\\gnuplot\\bin\\gnuplot.exe\" -persist", "w");
+        // FILE* gp = _popen("\"C:\\Program Files\\gnuplot\\bin\\gnuplot.exe\" -persist", "w"); // для Windows
+        FILE * gp = popen("gnuplot -persist", "w"); // для Linux/MacOS
         if (!gp) {
             std::cerr << "Ошибка" << std::endl;
             return;
@@ -206,7 +186,8 @@ public:
         fflush(gp);
         std::cout << "Закройте окно Gnuplot чтобы продолжить" << std::endl;
         std::cin.get();
-        _pclose(gp);
+        // _pclose(gp); // для Windows
+        pclose(gp); // для Linux/MacOS
     }
 };
 
@@ -288,7 +269,7 @@ double getLiftCoefficient(double alpha) const{
     double total_thrust(double current_altitude){
         double p_0 = env.getPressure(0);
         double current_p = env.getPressure(current_altitude);
-        return MS21_NOMINAL_THRUST*MAX_THRUST_PERCENT * pow(current_p/p_0, 0.7); // коррекция тяги по плототности и давлению 
+        return MS21_NOMINAL_THRUST*MAX_THRUST_PERCENT * pow(current_p/p_0, 0.7); // коррекция тяги по плотности и давлению 
     }
 };
 
@@ -351,15 +332,16 @@ public:
         }
         return dt;
     }
-    Trajectory computeOptimalTrajectory(Aircraft& ac, double time_max = 600.0) {
+    Trajectory computeOptimalTrajectory(Aircraft& ac) {
         
+
         int N = (FINAL_ALTITUDE - INITIAL_ALTITUDE) / DELTA_H;
         double DELTA_V = (FINAL_VELOCITY - INITIAL_VELOCITY) / N;
         std::vector <double> Hgrid(N+1);
         std::vector <double> Vgrid(N+1);
         
-        for (size_t i = 0; i < N+1; i++){
-            Hgrid[i] = INITIAL_ALTITUDE + i*DELTA_H;
+        for (size_t i = 0; i <= N; i++){
+            Hgrid[i] = INITIAL_ALTITUDE + i * DELTA_H;
             Vgrid[i] = INITIAL_VELOCITY + i * DELTA_V;
         }
         std::cout << "Критерий минимизации времени" << "\n";
@@ -425,7 +407,7 @@ public:
         std::cout << "\nH\n";
         for (int i = 0; i <= N; i++) {
             std::cout << std::setw(5) << (int)Hgrid[i];
-            for (int j = 0; j <= N+1; j++) {
+            for (int j = 0; j <= N; j++) {
                 if (time_table[i][j] < 1e8) {
                     std::cout << std::setw(7) << (int)time_table[i][j];
                 }
@@ -435,18 +417,30 @@ public:
             }
             std::cout << "\n";
         }
-        
+
+        Trajectory trajectory;
+        TrajectoryPoint point;
         std::vector<std::pair<double, double> > path;
         int ci = N, cj = N;
+        size_t i = 0;
         while (ci >= 0 && cj >= 0) {
             path.push_back(std::make_pair(Hgrid[ci], Vgrid[cj]));
+            point.time = time_table[ci][cj];
+            point.y = Hgrid[ci];
+            point.V = Vgrid[cj];
+            trajectory.addPoint(point);
             int pi = prev_i[ci][cj];
             int pj = prev_j[ci][cj];
             if (pi == -1) break;
             ci = pi;
             cj = pj;
+            std::cout << "Оптимальный путь полета\n";
+            std::cout << "Высота: " <<path[i].first << "\nСкорость: " << path[i].second << "\n\n";
+            std::cout << "Текущая точка\n";
+            std::cout << "Time: " << point.time << " Y: " << point.y << " V:" << point.V << "\n";
+            i++; 
         }
-    
+    return trajectory;
 }
 };
 
@@ -455,9 +449,9 @@ int main() {
     try {
         Aircraft ms21;
         DynamicProgrammingSolver solver;
-        Trajectory trajectory = solver.computeOptimalTrajectory(ms21, 600.0);
+        Trajectory trajectory = solver.computeOptimalTrajectory(ms21);
         trajectory.saveToCSV("ms21_trajectory_realistic.csv");
-        // trajectory.plotTrajectory();
+        trajectory.plotTrajectory();
     } catch (const std::exception& e) {
         std::cerr << "ОШИБКА: " << e.what() << std::endl;
         return 1;
