@@ -238,7 +238,7 @@ double getLiftCoefficient(double alpha) const{
         if (alpha > 12) alpha = 12;
     // Для расчета воспользуемся линейной зависимостью
         double grad_Cy = grad_Cy_alpha();
-        double Cy = 0.25 + grad_Cy * alpha;
+        double Cy = MS21_CY0 + grad_Cy * alpha;
         if (Cy > 1.1)
             return 1.1;
         return Cy;
