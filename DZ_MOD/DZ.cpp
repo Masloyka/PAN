@@ -221,7 +221,7 @@ public:
         double q = 0.5 * rho * current_velocity * current_velocity;
         double current_P = total_thrust(current_altitude);
 
-        double alpha = (MS21_MASS * GRAVITY - q * MS21_WING_AREA * MS21_CY0) / (q * MS21_WING_AREA * grad_Cy + current_P);
+        double alpha = (mass * GRAVITY - q * MS21_WING_AREA * MS21_CY0) / (q * MS21_WING_AREA * grad_Cy + current_P);
         return alpha;
 
     }
@@ -265,6 +265,15 @@ double getLiftCoefficient(double alpha) const{
         double X = 0.5 * rho * current_velocity * current_velocity * MS21_WING_AREA * Cx;
         return X;
     }
+    // Расхода топлива
+    double calculate_mass_flow(double dt){
+        double delta_mass;
+        delta_mass = fuel_flow * dt;
+        std::cout << "Текущая delta_MASS: " << delta_mass << std::endl;
+        mass = mass - delta_mass;
+        return mass;
+    }
+
     // Расчет тяги в зависимости от параметров окружающей среды
     double total_thrust(double current_altitude){
         double p_0 = env.getPressure(0);
@@ -290,7 +299,8 @@ public:
         double rho = env.getDensity(altitude);
         double q = 0.5 * avg_Vel* avg_Vel * rho;
         double alpha_rad = alpha_degree/DEG_TO_RAD;
-        double a_x = ((current_P * cos(alpha_rad)) - q * Cx * MS21_WING_AREA) / MS21_MASS;
+        double a_x = ((current_P * cos(alpha_rad)) - q * Cx * MS21_WING_AREA) / ac.mass;
+        double dt = (final_velocity - initial_velocity) / a_x;
         return (final_velocity - initial_velocity) / a_x;
 
     }
@@ -305,7 +315,7 @@ public:
         double q = 0.5 * velocity*velocity*rho;
         double X = q * MS21_WING_AREA * Cx;
 
-        double sin_tetha = std::min((current_P-X) / (MS21_MASS* GRAVITY), MAX_CLIMB_ANGLE/DEG_TO_RAD);
+        double sin_tetha = std::min((current_P-X) / (ac.mass* GRAVITY), MAX_CLIMB_ANGLE/DEG_TO_RAD);
         double vel_y = velocity * sin_tetha;
         if (vel_y > MAX_VERTICAL_SPEED) vel_y = MAX_VERTICAL_SPEED;
 
@@ -362,6 +372,7 @@ public:
                     double new_cost = cost_table[i][j]+time_razgon;
 
                     if(new_cost < cost_table[i][j+1]){
+                        
                         cost_table[i][j+1] = new_cost;
                         time_table[i][j+1] = time_table[i][j]+time_razgon;
                         prev_i[i][j+1] = i;
@@ -376,6 +387,7 @@ public:
                     double new_cost = cost_table[i][j]+time_podiem;
 
                     if (new_cost < cost_table[i+1][j]){
+                        
                         cost_table[i+1][j] = new_cost;
                         time_table[i+1][j] = time_table[i][j] + time_podiem;
                         prev_i[i+1][j] = i;
@@ -390,6 +402,7 @@ public:
                     double new_cost = cost_table[i][j]+time_podiem_razgon;
 
                     if(new_cost < cost_table[i+1][j+1]){
+                        
                         cost_table[i+1][j+1] = new_cost;
                         time_table[i+1][j+1] = time_table[i][j] + time_podiem_razgon;
                         prev_i[i+1][j+1] = i;
