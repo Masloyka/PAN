@@ -1,0 +1,4 @@
+1,1000,500,2000,CheckpointA
+2,2000,1500,2500,CheckpointB
+3,500,1000,1500,CheckpointC
+4,3000,2000,3000,CheckpointD
