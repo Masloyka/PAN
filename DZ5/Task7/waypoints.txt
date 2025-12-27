@@ -1,6 +1,10 @@
 1,1000,500,2000,CheckpointA
 2,2000,1500,2500,CheckpointB
 3,500,1000,1500,CheckpointC
+<<<<<<< HEAD
 4,3000,2000,3000,CheckpointD
 
 
+=======
+4,3000,2000,3000,CheckpointD
+>>>>>>> e7c8263cb2519c095a839cc42c64d52d22993de6
